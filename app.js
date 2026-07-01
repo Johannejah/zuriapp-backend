@@ -2,18 +2,56 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const products = require("./data/products");
+const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
 
 const app = express();
 
-const API_SECRET_KEY = process.env.API_SECRET_KEY;
-const STORE_NAME = process.env.STORE_NAME || "My Store";
+// Load secrets from AWS Secrets Manager in production
+// Fall back to .env values in local development
+async function loadSecrets() {
+  if (process.env.NODE_ENV !== "production") {
+    return {
+      API_SECRET_KEY: process.env.API_SECRET_KEY,
+      STORE_NAME: process.env.STORE_NAME || "Zuri Market",
+    };
+  }
+
+  const client = new SecretsManagerClient({
+    region: process.env.AWS_REGION || "us-east-1",
+  });
+
+  const response = await client.send(
+    new GetSecretValueCommand({
+      SecretId: "zuriapp/production",
+    })
+  );
+
+  return JSON.parse(response.SecretString);
+}
+
+let secrets = {};
+
+// Load secrets before starting the server
+loadSecrets()
+  .then((loaded) => {
+    secrets = loaded;
+    console.log("Secrets loaded successfully");
+  })
+  .catch((err) => {
+    console.error("Failed to load secrets:", err.message);
+    console.log("Falling back to environment variables");
+    secrets = {
+      API_SECRET_KEY: process.env.API_SECRET_KEY,
+      STORE_NAME: process.env.STORE_NAME || "Zuri Market",
+    };
+  });
 
 app.use(cors());
 app.use(express.json());
 
 const validateApiKey = (req, res, next) => {
   const key = req.headers["x-api-key"];
-  if (!key || key !== API_SECRET_KEY) {
+  if (!key || key !== secrets.API_SECRET_KEY) {
     return res.status(401).json({ error: "Unauthorized: invalid or missing API key" });
   }
   next();
@@ -30,7 +68,7 @@ app.get("/api/health", (req, res) => {
 
 // GET /api/store — store info
 app.get("/api/store", (req, res) => {
-  res.json({ name: STORE_NAME, totalProducts: products.length });
+  res.json({ name: secrets.STORE_NAME || "Zuri Market", totalProducts: products.length });
 });
 
 // GET /api/products — all products (optional ?category= filter)
